@@ -1,6 +1,6 @@
 # Movie Lens Project : HarvardX: PH125.9x Data Science course.
 # Frederico de Almeida Meirelles Palma
-## https://github.com/fredpalma/machine-learning/movielens/
+## https://github.com/fredpalma/machine-learning/tree/master/movielens
 
 
 ################################
