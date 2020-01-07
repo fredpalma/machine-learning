@@ -1,0 +1,433 @@
+---
+title: 'MovieLens Project: Harvardx: PH125.9x Data Science'
+author: "Frederico de Almeida Meirelles Palma"
+date: "January 07, 2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 1 - Project Overview
+
+The project is to create a movie recommendation system using MovieLens dataset. It's one of the Capstone exercise from HarvardX: PH125.9x Data Science course.
+
+
+# 2 - Introduction
+
+The objective is to train a machine learning algorithm using the inputs in one subset (`edx`) to predict movie ratings in the validation set (`validation`). 
+The provided data is a 65.6MB zip file with around 10M from MovieLens dataset collected by the GroupLens research lab, Department of Computer Science and Engineering at the University of Minnesota and it's available in this url: http://files.grouplens.org/datasets/movielens/ml-10m.zip.
+Running the code below, the datasets are already generated enabling data analysis and exploration. After that, the process is to train a machine learning algorithm using the inputs in one subset to predict movie ratings in the validation set.
+
+
+################################
+## 2.1 - Creating edx set and validation set
+################################
+
+```{r Create edx set, validation set, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+
+set.seed(1, sample.kind="Rounding")
+# if using R 3.5 or earlier, use `set.seed(1)` instead
+
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+     semi_join(edx, by = "movieId") %>%
+     semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+# If required install some packages
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+library("ggplot2")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+library("dplyr")
+```
+
+# 3 - Data Analysis
+
+## 3.1 - The loss-function
+
+The loss-function used is the Root-Mean-Squared-Error(RMSE), already gived, defined as:
+$$ RMSE = \sqrt{\frac{1}{N}\displaystyle\sum_{u,i} (\hat{y}_{u,i}-y_{u,i})^{2}} $$
+In R we will use this function:
+
+```{r RMSE as loss function, echo = TRUE}
+
+RMSE <- function(predicted_ratings, true_ratings){
+  sqrt(mean((predicted_ratings - true_ratings)^2))
+}
+
+```
+
+
+## 3.2 - Exploring edx dataset
+
+The dataset was already provided in a usable format and it was splitted in 2 datasets, one for training (`edx`) with 90% and the other for validation (`validation`) with 10% of MovieLens data.
+The `edx` data set contains the following features:
+
+```{r number of rows and columns, echo = TRUE}
+dim(edx)
+```
+
+9.000.055 rows and 6 columns.
+
+```{r head, echo = TRUE}
+head(edx)
+```
+
+The 6 columns are : userID, movieId, rating, timestamp, title and genres.
+
+```{r rating range and the quantity of each, echo = TRUE}
+table(edx$rating)
+```
+
+The rating rage is from 0.5 to 5.
+
+The rating histogram is:
+
+```{r rating histogram, echo = TRUE}
+hist(edx$rating)
+```
+
+```{r Counting rating, echo = TRUE}
+edx %>%
+group_by(rating) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count)) %>%
+knitr::kable()
+```
+
+The top 3 ratings are: 4, 3 and 5.  
+
+Rating Summary:
+
+```{r rating summary, echo = TRUE}
+summary(edx$rating)
+```
+
+The analysis above show us that the data set doesn't have rating missing values.
+
+
+Summarize distinct users and movies:
+
+```{r summarize unique users and movies, echo = TRUE}
+edx %>%
+  summarize(n_users = n_distinct(userId),
+            n_movies = n_distinct(movieId))
+```
+
+The `edx` dataset has 69.878 unique users and 10.677 unique movies.
+
+
+Getting 100 users and 100 movies we can show that is a sparse matrix:
+
+```{r matrix visualization example, echo = TRUE}
+users <- sample(unique(edx$userId), 100)
+rafalib::mypar()
+edx %>% filter(userId %in% users) %>% 
+  select(userId, movieId, rating) %>%
+  mutate(rating = 1) %>%
+  spread(movieId, rating) %>% select(sample(ncol(.), 100)) %>% 
+  as.matrix() %>% t(.) %>%
+  image(1:100, 1:100,. , xlab="Movies", ylab="Users")
+abline(h=0:100+0.5, v=0:100+0.5, col = "grey")
+```
+
+\pagebreak
+
+Some movies have only one rating, others few ratings and the dataset has a group that are frequently rated:
+
+```{r Movie rating distribution, echo = FALSE}
+edx %>% 
+  dplyr::count(movieId) %>% 
+  ggplot(aes(n)) + 
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + 
+xlab("Number of Ratings") +
+  ylab("Number of Movies") +
+  ggtitle("Quantity of Ratings per Movies")
+```
+
+Listing movies with one rating:
+
+```{r Movies with 1 rating, echo = TRUE}
+edx %>%
+group_by(title) %>%
+  summarize(count = n()) %>%
+  filter(count == 1) %>%
+knitr::kable()
+```
+
+126 movies have only 1 rating, the predictions of future ratings for them will be difficult.
+
+Some users are more active than others at rating:
+
+```{r Active users histogram, echo = TRUE}
+edx %>%
+  dplyr::count(userId) %>% 
+  ggplot(aes(n)) + 
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() +
+  ggtitle("Users")
+```
+
+# 4 - Model Development
+
+The RMSE will be our measure of model accuracy.
+RMSE is commonly used in movie rating prediction algorithms. Results larger than 1 means that the error is larger than one star, which is not a good result.
+
+
+$$ RMSE = \sqrt{\frac{1}{N}\displaystyle\sum_{u,i} (\hat{y}_{u,i}-y_{u,i})^{2}} $$
+
+N is the number of user/movie combinations and the sum occurring over all these combinations.
+As shown the RMSE function in R is:
+
+```{r RMSE Function, echo = TRUE}
+
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+```
+
+Lower results, means better predictions.
+
+To create a recomendation system model, we will start with a simplest model called Average Rating Model that assumes the same rating for all movies and all users, as learned from the course, if  $\mu$  represents the true rating for all movies and users and  $\epsilon_{u,i}$  represents independent errors sampled from the same distribution centered at zero, then we have: 
+
+$$ Y_{u, i} = \mu + \epsilon_{u, i} $$
+
+The least squares estimate of  $\mu$ is the average rating of all movies across all users.
+After that, the model will be improved adding a term,  $b_{i}$ that represents the Average Rating for Movie ${i}$, the Movie Effect, as follow:
+
+$$ Y_{u, i} = \mu + b_{i} +  \epsilon_{u, i} $$
+
+Then, we will improve adding the User Effect, $b_{u}$, to model:
+
+$$ Y_{u, i} = \mu + b_{i} + b_{u} +  \epsilon_{u, i} $$
+
+After that, to improve the results, the regularization will be applied. 
+Regularization constrains the total variability of the effect sizes by penalizing large estimates that come from small sample sizes such as an obscure film with only a few very low ratings. 
+As showed in the course, we can select the bias values using a regularization factor $\lambda$ as follows:
+
+$$\hat{b}_i(\lambda) = \frac{1}{\lambda + n_i} \sum_{i=1}^{n_i} \left(Y_{i,u,g} - \hat{\mu}\right)$$
+$$\hat{b}_u(\lambda) = \frac{1}{\lambda + n_u} \sum_{u=1}^{n_u} \left(Y_{i,u,g} - \hat{b}_i - \hat{\mu}\right)$$
+$$\hat{b}_g(\lambda) = \frac{1}{\lambda + n_g} \sum_{g=1}^{n_g} \left(Y_{i,u,g} - \hat{b}_i - \hat{b}_u - \hat{\mu}\right)$$
+
+## 4.1 - Average Rating Model
+
+Let's create the simplest possible recommendation system using the average of all the ratings:
+
+```{r edx rating mean, echo = TRUE}
+mu <- mean(edx$rating)
+mu
+```
+
+The first naive RMSE is:
+
+```{r RMSE in test set, echo = TRUE}
+naive_rmse <- RMSE(validation$rating, mu)
+naive_rmse
+```
+
+So, it's not a good result. 
+
+
+```{r RMSE Average Rating, echo = TRUE}
+rmse_ar <- tibble(Method = "Average Rating", RMSE = naive_rmse)
+knitr::kable(rmse_ar)
+```
+
+Let's improve the prediction adding Movie Effect.
+
+## 4.2 - Movie Effect Model
+
+```{r Movies averages set, echo = TRUE}
+
+movie_avgs <- edx %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+```
+
+```{r Ploting movie_avgs histogram , echo = TRUE}
+
+movie_avgs %>% qplot(b_i, geom ="histogram", bins = 10, data = ., color = I("black"))
+
+```
+
+
+Improving the model adding $b_{i}$.
+
+```{r Adding movie effect in the model, echo = TRUE}
+
+predicted_ratings <- mu + validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  .$b_i
+
+model_2_rmse <- RMSE(predicted_ratings, validation$rating)
+
+rmse_me <- tibble(Method = "Movie Effect Model", RMSE = model_2_rmse) 
+
+knitr::kable(rmse_me)
+```
+
+
+Now, let's add the User Effect, $b_{u}$.
+
+## 4.3 - User Effect Model
+
+```{r User effect, echo = TRUE}
+
+user_avgs <- edx %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+```
+
+
+```{r Ploting user_avgs histogram, echo = TRUE}
+
+user_avgs %>% qplot(b_u, geom ="histogram", bins = 10, data = ., color = I("black"))
+
+```
+
+
+Adding User Effect, $b_{u}$:
+
+```{r adding user effect model, echo = TRUE}
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+model_3_rmse <- RMSE(predicted_ratings, validation$rating)
+
+rmse_ue <- tibble(Method = "Movie and User Effects Model", RMSE = model_3_rmse)
+
+knitr::kable(rmse_ue)
+
+```
+
+
+## 4.4 - Regularization
+
+Now, let's apply regularization to improve the results:
+
+```{r regularization, echo = TRUE}
+
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+     mu <- mean(edx$rating)
+     b_i <- edx %>%
+          group_by(movieId) %>%
+          summarize(b_i = sum(rating - mu)/(n()+l))
+     b_u <- edx %>% 
+          left_join(b_i, by="movieId") %>%
+          group_by(userId) %>%
+          summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+     predicted_ratings <- 
+          edx %>% 
+          left_join(b_i, by = "movieId") %>%
+          left_join(b_u, by = "userId") %>%
+          mutate(pred = mu + b_i + b_u) %>%
+          .$pred
+     return(RMSE(predicted_ratings, edx$rating))
+})
+
+```
+
+Ploting lambdas and RMSEs:
+
+```{r Lambdas plot, echo = TRUE}
+
+qplot(lambdas, rmses)  
+
+```
+
+Getting the lambda that gives the less rmse:
+
+```{r best lambda, echo = TRUE}
+
+lambda <- lambdas[which.min(rmses)]
+lambda
+
+```
+
+Adding regularization:
+
+```{r regularized movie and user effect model, echo = TRUE}
+
+rmse_r <- tibble(Method = "Regularized Movie and User Effect Model", RMSE = min(rmses))
+knitr::kable(rmse_r)
+
+```
+
+# Results
+
+The best model for this project is the Regularized Movie and User Effect:
+
+$$Y_{u, i} = \mu + b_{i} + b_{u} + \epsilon_{u, i}$$
+
+With the lowest RMSE value:
+
+```{r best rmse, echo = TRUE}
+
+knitr::kable(rmse_r)
+
+```
+
+
+# 5 - Conclusion
+
+We built a machine learning algorithm to predict movie ratings with MovieLens dataset using Regularized Movie and User Effect Model.
+The best, lowest, RMSE value found is 0.8566952 using this model.
+We can affirm that RMSE value can be improved adding other effects (genre for example). Combining  others machine learning algorithms could also improve the results.
+
+
+# 6 - System Information
+Follow the system information and R version:
+
+```{r Version, echo = FALSE}
+print("System Information:")
+version
+```
