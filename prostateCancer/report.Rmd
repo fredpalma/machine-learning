@@ -1,0 +1,446 @@
+---
+title: 'Prostate Cancer Prediction Project'
+subtitle: 'Harvardx: PH125.9x Data Science'
+author: "Frederico de Almeida Meirelles Palma"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output:
+  pdf_document: 
+    toc: true
+    toc_depth: 3
+    number_sections: true
+geometry: margin=1in
+documentclass: book
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Project Overview
+
+ The idea of this project is apply machine learning techniques learned in HarvardX: PH125.9x Data Science course choosing a publicity data. 
+
+# Introduction
+
+ The objective is to train a machine learning algorithm using the inputs in one subset (training) and then check in the validation set (testing). 
+The chosed dataset is from Kaggle, the subject is prostate cancer and it can be found here:
+https://www.kaggle.com/sajidsaifi/prostate-cancer
+
+## Dataset
+
+```{r download data, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(funModeling)) install.packages("funModeling", repos = "http://cran.us.r-project.org")
+if(!require(corrplot)) install.packages("recorrplotadr", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(nnet)) install.packages("nnet", repos = "http://cran.us.r-project.org")
+
+# Prostate Cancer dataset:
+# https://www.kaggle.com/sajidsaifi/prostate-cancer #source
+# https://github.com/fredpalma/machine-learning/blob/master/prostateCancer/Prostate_Cancer.csv 
+# The file will be loaded from my github account
+
+# The data 
+data <- read.csv("https://raw.githubusercontent.com/fredpalma/machine-learning/master/prostateCancer/Prostate_Cancer.csv")
+
+library("ggplot2")
+library("dplyr")
+library("corrplot")
+library("funModeling")
+```
+
+# Data Analysis
+
+## Data features
+
+The dataset is in csv format and have the following features:
+
+Attributes: 
+1. id
+2. diagnosis_result (M = malignant, B = benign)
+
+Features:
+3. radius
+4. texture
+5. perimeter
+6. area
+7. smoothness
+8. compactness
+9. symmetry
+10. fractal_dimension
+
+## Exploring the dataset
+
+The dataset has 100 observations and 10 variables. 
+
+```{r number of rows and columns, echo = TRUE}
+dim(data)
+```
+
+Head of the dataset:
+
+```{r head, echo = TRUE}
+head(data)
+```
+
+
+Data Summary:
+
+```{r data summary, echo = TRUE}
+summary(data)
+```
+
+No missing values and the diagnosis results shows 62 malign and 38 benign cases.
+
+
+```{r, map data, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+map(data, function(.x) sum(is.na(.x)))
+```
+
+Let's analise the  proportions:
+
+```{r, proportion, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+prop.table(table(data$diagnosis_result))
+```
+
+```{r, diagnosis result distribution, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+options(repr.plot.width=5, repr.plot.height=5)
+ggplot(data, aes(x=diagnosis_result))+geom_bar(fill="blue",alpha=0.5)+theme_bw()+labs(title="Diagnosis Result Distribution")
+```
+
+As we can see the diagnosis result is slightly unbalanced.
+
+The most variables of the dataset are normally distributed as we can see:
+
+```{r, show all histograms, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+plot_num(data %>% select(-id), bins=10)
+```
+
+Removing ID column from dataset:
+
+```{r, Remove id variable, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+data2 <- data %>%select(-id)
+ncol(data2)
+```
+
+# Model Development
+
+## PCA and LDA
+
+### Principal Component Analysis (PCA).
+
+The objective to use Principal Component Analysis (PCA) is to reduce the dimensionality of a dataset and still mantains the most of the information of the original set.
+
+```{r, Principal Component Analysis, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE }
+pca_data <- prcomp(data2[,2:ncol(data2)], center = TRUE, scale = TRUE)
+plot(pca_data, type="l")
+```
+
+```{r ,PCA data Summary , echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE }
+summary(pca_data)
+```
+
+As we can see, the two first components explains the 0.629 of the variance, using 5 principal components we have more than 0.94 and using 7 components we have more than 0.99 of the variance.
+
+```{r, PCA data2 , echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE }
+pca_data2 <- prcomp(data2[,3:ncol(data2)], center = TRUE, scale = TRUE)
+plot(pca_data2, type="l")
+```
+```{r, PCA data2 Summary , echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE }
+summary(pca_data2)
+```
+
+Using pca_data2, we have more than 98% of the variance using 5 Principal Components.
+
+
+### Linear Discriminant Analysis (LDA)
+
+Another option is to use the Linear Discriminant Analysis (LDA) instead of PCA. LDA takes in consideration the different classes and could get better results. 
+
+```{r, Linear Discriminant Analysis, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE }
+lda_data <- MASS::lda(diagnosis_result~., data = data, center = TRUE, scale = TRUE) 
+lda_data
+
+lda_predict <- predict(lda_data, data)$x %>% as.data.frame() %>% cbind(diagnosis_result=data$diagnosis_result)
+
+ggplot(lda_predict, aes(x=LD1, fill=diagnosis_result)) + geom_density(alpha=0.5)
+```
+
+## Creating training and testing datasets 
+
+Let's create the training and testing set using 80% to train and 20% to test then by building machine learning classification models with the objective it to predict whether is benign or malign.
+
+```{r, Training and Testing sets ,echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE }
+#set.seed(3) # if using R 3.5 or earlier
+set.seed(3, sample.kind = "Rounding")    # if using R 3.6 or later
+data3 <- cbind (diagnosis_result=data$diagnosis_result, data2)
+data_sampling_index <- createDataPartition(data$diagnosis, times=1, p=0.8, list = FALSE)
+training <- data3[data_sampling_index, ]
+testing <- data3[-data_sampling_index, ]
+
+
+fitControl <- trainControl(method="cv",
+                           number = 15,    #Either the number of folds or number of resampling iterations
+                           classProbs = TRUE,
+                           summaryFunction = twoClassSummary)
+```
+
+## Metrics description
+
+Beforer apply some models follow the metrics description that we will use to compare them:
+
+Accuracy is the number of correct predictions made divided by the total number of predictions made, multiplied by 100 to turn it into a percentage.
+
+Precision or Positive Predictive Value (PPV) is the number of True Positives divided by the number of True Positives and False Positives. A low precision can also indicate a large number of False Positives.
+
+Recall (Sensitivity) or True Positive Rate is the number of True Positives divided by the number of True Positives and the number of False Negatives.Recall can be thought of as a measure of a classifiers completeness. A low recall indicates many False Negatives.
+
+F1 Score (F Score) or F Measure is the 2 x ((precision x recall) / (precision + recall)). The F1 score conveys the balance between the precision and the recall.
+
+
+## Naive Bayes Model
+
+The Naive Bayesian classifier is based on applying Bayes' theorem with strong naive independence assumptions between the features. 
+
+```{r, Naive Bayes Model, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+naive <- train(diagnosis_result~.,
+                      training,
+                      method="nb",
+                      metric="ROC",
+                      preProcess=c('center', 'scale'), #in order to normalize the data
+                      trace=FALSE,
+                      trControl=fitControl)
+
+naive_pred <- predict(naive, testing)
+confusionmatrix_naive <- confusionMatrix(naive_pred, testing$diagnosis_result, positive = "M")
+confusionmatrix_naive
+
+```
+
+The most important variables that permit the best prediction and contribute the most to the model are the following:
+
+```{r, Naive Bayes Top 5 variables  Visualization, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}}
+plot(varImp(naive), top=5, main="Naive Bayes - Top 5 variables")
+```
+
+## Logistic Regression Model 
+
+Logistic Regression is widly used for binary classification like (0,1). The binary logistic model is used to estimate the probability of a binary response based on one or more predictor (or independent) variables (features).
+
+```{r, Logistic Regression Model ,echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+logreg<- train(diagnosis_result ~., 
+               data = training, method = "glm",
+                     metric = "ROC",
+                     preProcess = c("scale", "center"),  # in order to normalize the data
+                     trControl= fitControl)
+logreg_pred<- predict(logreg, testing)
+
+# Checking results
+confusionmatrix_logreg <- confusionMatrix(logreg_pred, testing$diagnosis_result, positive = "M")
+confusionmatrix_logreg
+
+```
+
+The most important variables that permit the best prediction and contribute the most to the model are the following:
+
+```{r, Logistic Regression Top 5 variables Visualization ,echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+plot(varImp(logreg), top=5, main=" Logistic  Regression - Top 5 variables")
+
+```
+
+
+## Random Forest Model
+
+Random Forest is a supervised learning algorithm that builds multiple decision trees and merges them together to get a more accurate and stable prediction.
+
+```{r, Random Forest Model ,echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+randomforest <- train(diagnosis_result~.,
+                            training,
+                            method="rf",  
+                            metric="ROC",
+                            tuneLength=10,
+                            tuneGrid = expand.grid(mtry = c(2, 3, 6)),
+                            preProcess = c('center', 'scale'),
+                            trControl=fitControl)
+
+randomforest_pred <- predict(randomforest, testing)
+
+confusionmatrix_randomforest <- confusionMatrix(randomforest_pred, testing$diagnosis_result, positive = "M")
+confusionmatrix_randomforest
+
+```
+
+```{r, Random Forest - Top 5 variables ,echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+plot(varImp(randomforest), top=5, main="Random Forest - Top 5 variables")
+
+```
+
+
+## K Nearest Neighbors (KNN) Model
+
+KNN (K-Nearest Neighbors) is a classifier algorithm where the learning is based “how similar” is a data from other. K nearest neighbors algorithm stores all available cases and classifies new cases based on a similarity measure.
+
+```{r, K Nearest Neighbors, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+knn <- train(diagnosis_result~.,
+                   training,
+                   method="knn",
+                   metric="ROC",
+                   preProcess = c('center', 'scale'),
+                   tuneLength=10,
+                   trControl=fitControl)
+
+knn_pred <- predict(knn, testing)
+confusionmatrix_knn <- confusionMatrix(knn_pred, testing$diagnosis_result, positive = "M")
+confusionmatrix_knn
+
+```
+
+The most important variables that permit the best prediction and contribute the most to the model are the following:
+
+```{r, KNN - Top 5 variables}
+
+plot(varImp(knn), top=5, main="KNN - Top 5 variables")
+
+```
+
+
+## Neural Network with PCA Model
+
+Artificial Neural Networks (NN) are a types of mathematical algorithms originating in the simulation of networks of biological neurons that ares designed to recognize patterns.
+
+```{r, Neural Network with PCA Model, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+nn_pca <- train(diagnosis_result~.,
+                        training,
+                        method="nnet",
+                        metric="ROC",
+                        preProcess=c('center', 'scale', 'pca'),
+                        tuneLength=10,
+                        trace=FALSE,
+                        trControl=fitControl)
+
+nn_pca_pred <- predict(nn_pca, testing)
+confusionmatrix_nn_pca <- confusionMatrix(nn_pca_pred, testing$diagnosis_result, positive = "M")
+confusionmatrix_nn_pca
+
+
+```
+
+The most important variables that permit the best prediction and contribute the most to the model are the following:
+
+
+```{r, Neural Network with PCA - Top 5 variables, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+plot(varImp(nn_pca), top=5, main="Neural Network with PCA - Top 5 variables")
+
+```
+
+
+## Neural Network with LDA Model
+
+Creating the training and testing set of LDA data:
+
+```{r, LDA training and testing sets creation, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+training_lda <- lda_predict[data_sampling_index, ]
+testing_lda <- lda_predict[-data_sampling_index, ]
+
+```
+
+
+```{r, Neural Network with LDA Model, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+nn_lda <- train(diagnosis_result~.,
+                        training_lda,
+                        method="nnet",
+                        metric="ROC",
+                        preProcess=c('center', 'scale'),
+                        tuneLength=10,
+                        trace=FALSE,
+                        trControl=fitControl)
+
+nn_lda_pred <- predict(nn_lda, testing_lda)
+confusionmatrix_nn_lda <- confusionMatrix(nn_lda_pred, testing_lda$diagnosis_result, positive = "M")
+confusionmatrix_nn_lda
+```
+
+# Results
+
+Now, we can compare and evaluate the results:
+
+```{r, Summary Models Results, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+model_list <- list(Naive_Bayes=naive,
+                    Logistic_Regression=logreg,
+                    Random_Forest=randomforest,
+                    KNN=knn,
+                    Neural_PCA=nn_pca,
+                    Neural_LDA=nn_lda)                                     
+model_results <- resamples(model_list)
+
+summary(model_results)
+
+```
+
+
+```{r, Plotting the results , echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+bwplot(model_results, metric="ROC")
+
+```
+
+The Receiver Operating characteristic Curve is a graph showing the performance of a classification model at all classification thresholds metric measure the auc of the roc curve of each model. This metric is independent of any threshold. Prediction classes are obtained by default with a threshold of 0.5 which could not be the best with an unbalanced dataset.
+
+```{r, Confusion Matrix Results, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+confusionmatrix_list <- list(
+  Naive_Bayes=confusionmatrix_naive,
+  Logistic_Regression=confusionmatrix_logreg,
+  Random_Forest=confusionmatrix_randomforest,
+  KNN=confusionmatrix_knn,
+  Neural_PCA=confusionmatrix_nn_pca,
+  Neural_LDA=confusionmatrix_nn_lda)   
+confusionmatrix_list_results <- sapply(confusionmatrix_list, function(x) x$byClass)
+confusionmatrix_list_results %>% knitr::kable()
+
+```
+
+
+# Discussion
+
+
+Analysing the metrics results, the best results in Sensitivity is KNN Model, in Prevalence is Logistic Regression, in Detection Prevalence is Neural Network with PCA and the Model that has more best metrics results in Specificity, Positive Prediction Value, Precision, Recall, F1 score, Detection Rate and Balanced Accuracy is Neural Network with Linear Discriminant Analysis Model.
+
+
+```{r , Final Results, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+
+confusionmatrix_results_max <- apply(confusionmatrix_list_results, 1, which.is.max)
+
+metrics_report <- data.frame(metric=names(confusionmatrix_results_max), 
+                            best_model=colnames(confusionmatrix_list_results)[confusionmatrix_results_max],
+                            value=mapply(function(x,y) {confusionmatrix_list_results[x,y]}, 
+                                         names(confusionmatrix_results_max), 
+                                         confusionmatrix_results_max))
+rownames(metrics_report) <- NULL
+metrics_report
+```
+
+# Conclusion
+
+We analised a group of machine learning models and we choose Neural Network with Linear Discriminant Analysis (LDA) Model with high Specificity, Positive Prediction Value, Precision, Recall, F1 score, Detection Rate and Balanced Accuracy for the dataset analised.
+
+
+# System Information
+```{r, System Information, echo = FALSE, message = FALSE, warning = FALSE, eval = TRUE}
+print("Operating System and R:")
+version
+```
